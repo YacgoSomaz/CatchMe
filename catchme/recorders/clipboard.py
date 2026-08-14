@@ -42,6 +42,7 @@ class ClipboardRecorder(PollingRecorder):
     def __init__(self, config: Config) -> None:
         super().__init__()
         self.interval = config.clipboard_interval
+        self.max_bytes = config.clipboard_max_bytes
         self._prev_hash: str = ""
 
     def poll(self, emit: Emit) -> None:
@@ -52,4 +53,16 @@ class ClipboardRecorder(PollingRecorder):
         if h == self._prev_hash:
             return
         self._prev_hash = h
+        size_bytes = len(text.encode("utf-8"))
+        if size_bytes > self.max_bytes:
+            emit(
+                {
+                    "type": "text/plain",
+                    "dropped": True,
+                    "reason": "clipboard_too_large",
+                    "size_bytes": size_bytes,
+                    "max_bytes": self.max_bytes,
+                }
+            )
+            return
         emit({"content": text, "type": "text/plain"})

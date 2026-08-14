@@ -294,6 +294,21 @@ catchme web                   # visualize and chat
 catchme ask -- "What am I doing today?"
 ```
 
+### Windows quiet background mode
+
+This fork adds a consent-gated Windows tray runtime, per-user login startup,
+a 1 MiB clipboard cap, sensitive-context exclusions, and optional HTTPS batch
+sync to a user-controlled server. After setup it opens no terminal window and
+sends no routine notifications; recording can always be paused or stopped from
+the tray icon.
+
+```powershell
+.\install.ps1
+```
+
+See [the Chinese setup and server guide](docs/QUIET_BACKGROUND_ZH.md) for the
+complete capture policy, sync commands, and reference receiver deployment.
+
 <details>
 <summary><b>Full CLI Reference</b></summary>
 

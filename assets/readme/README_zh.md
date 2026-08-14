@@ -292,6 +292,18 @@ catchme web                   # 可视化与对话
 catchme ask -- "我今天都做了什么？"
 ```
 
+### Windows 低打扰后台模式
+
+此 fork 增加了经过一次授权的 Windows 托盘后台进程、用户登录自启动、1 MiB
+剪贴板限制、敏感上下文排除，以及向个人服务器进行 HTTPS 批量同步的能力。设置完成后
+不打开终端窗口，也不发送日常弹窗；始终可以通过托盘图标暂停或退出。
+
+```powershell
+.\install.ps1
+```
+
+完整说明见 [Windows 低打扰后台记录与服务器同步](../../docs/QUIET_BACKGROUND_ZH.md)。
+
 <details>
 <summary><b>完整 CLI 命令参考</b></summary>
 

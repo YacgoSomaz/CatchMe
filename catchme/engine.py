@@ -10,6 +10,7 @@ from queue import Empty, Queue
 
 from .config import Config
 from .organizer import Organizer
+from .privacy import CapturePolicy
 from .recorder import Recorder
 from .store import Event, Store
 
@@ -31,6 +32,7 @@ class Engine:
         self._paused = False
         self.on_event: Callable[[Event], None] | None = None
         self._organizer = Organizer(store, config)
+        self._capture_policy = CapturePolicy(config)
 
     @property
     def paused(self) -> bool:
@@ -79,7 +81,10 @@ class Engine:
         def emit(data: dict, blob: str = "") -> None:
             if self._paused:
                 return
-            event = Event(timestamp=time.time(), kind=kind, data=data, blob=blob)
+            cleaned = self._capture_policy.process(kind, data)
+            if cleaned is None:
+                return
+            event = Event(timestamp=time.time(), kind=kind, data=cleaned, blob=blob)
             self._queue.put(event)
             self._organizer.on_event(event)
             if self.on_event:

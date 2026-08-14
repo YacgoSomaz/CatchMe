@@ -62,6 +62,7 @@ _MOD_KEYS = frozenset(
 _TEXT_WINDOW = 0.5
 _ZWS = "\u200b"
 _UIA_ValuePatternId = 10002
+_UIA_IsPasswordPropertyId = 30019
 
 
 def _init_uia():
@@ -159,6 +160,18 @@ class KeyboardRecorder:
         if focused is None:
             self._reset_text_state()
             return
+
+        # UI Automation exposes password controls explicitly.  Never inspect
+        # their Value pattern, even if an application accidentally makes it
+        # available to accessibility clients.
+        try:
+            if bool(focused.GetCurrentPropertyValue(_UIA_IsPasswordPropertyId)):
+                self._reset_text_state()
+                return
+        except Exception:
+            # Some custom controls do not implement this property.  Continue
+            # with the normal Value-pattern checks in that case.
+            pass
 
         try:
             pattern = focused.GetCurrentPattern(_UIA_ValuePatternId)

@@ -16,17 +16,20 @@ import time
 
 from .config import Config
 from .engine import Engine
-from .recorders import ALL
 from .store import Event, Store
 
 
 class CatchMe:
     def __init__(self, config: Config | None = None) -> None:
-        self.config = config or Config()
+        from .recorders import ALL
+
+        self.config = config or Config.from_user_settings()
         self.config.ensure_dirs()
         self.store = Store(self.config.db_path)
         recorders = [
-            cls(self.config) if getattr(cls, "needs_config", False) else cls() for cls in ALL
+            cls(self.config) if getattr(cls, "needs_config", False) else cls()
+            for cls in ALL
+            if cls.kind in self.config.enabled_recorders
         ]
         self._engine = Engine(self.config, self.store, recorders)
 

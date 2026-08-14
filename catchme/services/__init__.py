@@ -60,6 +60,28 @@ _DEFAULTS: dict[str, Any] = {
         "temperature_select": 0.3,
         "temperature_answer": 0.7,
     },
+    "capture": {
+        "enabled_recorders": ["window", "keyboard", "clipboard", "idle"],
+        "clipboard_max_bytes": 1048576,
+        "redact_secrets": True,
+        "excluded_apps": [
+            "1password",
+            "bitwarden",
+            "keepass",
+            "keepassxc",
+            "lastpass",
+            "dashlane",
+            "enpass",
+        ],
+        "excluded_window_titles": ["password", "密码", "验证码", "one-time code"],
+    },
+    "sync": {
+        "enabled": False,
+        "server_url": "",
+        "interval_seconds": 60,
+        "batch_size": 250,
+        "timeout_seconds": 20,
+    },
 }
 
 _cached_config: dict[str, Any] | None = None

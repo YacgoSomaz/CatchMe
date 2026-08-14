@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -9,6 +10,28 @@ from pathlib import Path
 @dataclass
 class Config:
     root: Path = field(default_factory=lambda: Path.home() / ".catchme")
+
+    # Capture policy.  Keep the default deliberately narrow: enough context to
+    # make committed text and clipboard history useful, without screenshots,
+    # mouse trails, or notifications.
+    enabled_recorders: tuple[str, ...] = ("window", "keyboard", "clipboard", "idle")
+    clipboard_max_bytes: int = 1024 * 1024
+    redact_secrets: bool = True
+    excluded_apps: tuple[str, ...] = (
+        "1password",
+        "bitwarden",
+        "keepass",
+        "keepassxc",
+        "lastpass",
+        "dashlane",
+        "enpass",
+    )
+    excluded_window_titles: tuple[str, ...] = (
+        "password",
+        "密码",
+        "验证码",
+        "one-time code",
+    )
 
     # Recorder intervals (seconds)
     window_interval: float = 1.0
@@ -57,6 +80,61 @@ class Config:
     @property
     def monitor_history_path(self) -> Path:
         return self.root / "monitor_history.json"
+
+    @property
+    def consent_path(self) -> Path:
+        return self.root / "consent.json"
+
+    @property
+    def device_path(self) -> Path:
+        return self.root / "device.json"
+
+    @property
+    def background_log_path(self) -> Path:
+        return self.root / "background.log"
+
+    @classmethod
+    def from_user_settings(cls, root: Path | None = None) -> Config:
+        """Build recorder settings from ``~/.catchme/config.json``.
+
+        The service configuration loader intentionally remains separate; this
+        small loader keeps the recorder core usable without importing service
+        modules and avoids circular imports.
+        """
+        cfg = cls(root=root or Path.home() / ".catchme")
+        if not cfg.config_path.exists():
+            return cfg
+        try:
+            raw = json.loads(cfg.config_path.read_text("utf-8"))
+        except (OSError, ValueError, TypeError):
+            return cfg
+
+        capture = raw.get("capture", {})
+        if not isinstance(capture, dict):
+            return cfg
+
+        enabled = capture.get("enabled_recorders")
+        if isinstance(enabled, list) and all(isinstance(item, str) for item in enabled):
+            cfg.enabled_recorders = tuple(enabled)
+
+        max_bytes = capture.get("clipboard_max_bytes")
+        if isinstance(max_bytes, int) and max_bytes > 0:
+            cfg.clipboard_max_bytes = min(max_bytes, 1024 * 1024)
+
+        redact = capture.get("redact_secrets")
+        if isinstance(redact, bool):
+            cfg.redact_secrets = redact
+
+        excluded_apps = capture.get("excluded_apps")
+        if isinstance(excluded_apps, list) and all(isinstance(item, str) for item in excluded_apps):
+            cfg.excluded_apps = tuple(excluded_apps)
+
+        excluded_titles = capture.get("excluded_window_titles")
+        if isinstance(excluded_titles, list) and all(
+            isinstance(item, str) for item in excluded_titles
+        ):
+            cfg.excluded_window_titles = tuple(excluded_titles)
+        return cfg
 
     def ensure_dirs(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)

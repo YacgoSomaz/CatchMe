@@ -40,6 +40,12 @@ CREATE TRIGGER IF NOT EXISTS events_raw_ad AFTER DELETE ON events_raw BEGIN
     INSERT INTO events_raw_fts(events_raw_fts, rowid, data)
         VALUES ('delete', old.id, old.data);
 END;
+
+CREATE TABLE IF NOT EXISTS events_synced (
+    event_id    INTEGER PRIMARY KEY,
+    synced_at   REAL NOT NULL,
+    FOREIGN KEY(event_id) REFERENCES events_raw(id) ON DELETE CASCADE
+);
 """
 
 
@@ -135,6 +141,27 @@ class Store:
         )
         params.append(limit)
         return [self._row_to_event(r) for r in self._conn.execute(sql, params)]
+
+    def query_unsynced(self, limit: int = 250) -> list[Event]:
+        """Return locally persisted events not acknowledged by the server."""
+        rows = self._conn.execute(
+            "SELECT e.id, e.ts, e.kind, e.data, e.blob "
+            "FROM events_raw e "
+            "LEFT JOIN events_synced s ON s.event_id = e.id "
+            "WHERE s.event_id IS NULL "
+            "ORDER BY e.id ASC LIMIT ?",
+            (limit,),
+        )
+        return [self._row_to_event(row) for row in rows]
+
+    def mark_synced(self, event_ids: list[int], synced_at: float) -> None:
+        if not event_ids:
+            return
+        self._conn.executemany(
+            "INSERT OR REPLACE INTO events_synced(event_id, synced_at) VALUES (?, ?)",
+            [(event_id, synced_at) for event_id in event_ids],
+        )
+        self._conn.commit()
 
     @staticmethod
     def _row_to_event(row: tuple) -> Event:

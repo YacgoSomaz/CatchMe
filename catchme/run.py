@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 from datetime import datetime
+from getpass import getpass
 from pathlib import Path
 
 # ── ANSI palette ──
@@ -280,6 +281,8 @@ def cmd_awake() -> None:
 
     from catchme import CatchMe
 
+    _ensure_consent_interactive()
+
     mem = CatchMe()
     data_path = str(mem.config.root)
 
@@ -347,6 +350,148 @@ def cmd_awake() -> None:
     _p(f"  {DIM}data →{RST}  {CYAN}{data_path}{RST}")
     _p(f"  {DIM}{'─' * 42}{RST}")
     _p("")
+
+
+# ── consent, background, startup, and sync ──
+
+
+def _ensure_consent_interactive() -> None:
+    from catchme.config import Config
+    from catchme.privacy import grant_consent, has_consent
+
+    config = Config.from_user_settings()
+    if has_consent(config):
+        return
+    if not sys.stdin.isatty():
+        _p(f"  {RED}recording consent is required.{RST} Run {CYAN}catchme consent grant{RST}.")
+        sys.exit(2)
+
+    _p("")
+    _p(f"  {PURPLE}{BOLD}CatchMe recording consent{RST}")
+    _p(f"  {DIM}{'─' * 52}{RST}")
+    _p("  Records committed text, shortcuts, active-window context,")
+    _p("  idle state, and clipboard text up to 1 MiB.")
+    _p("  Password controls and configured sensitive apps are excluded.")
+    _p("  A tray icon remains available whenever background recording runs.")
+    _p(f"  {DIM}{'─' * 52}{RST}")
+    answer = _input("  type AGREE to enable recording: ")
+    if answer != "AGREE":
+        _p(f"  {YELLOW}consent not granted; recording was not started.{RST}")
+        sys.exit(2)
+    grant_consent(config)
+    _p(f"  {GREEN}✓ consent saved{RST}  {DIM}{config.consent_path}{RST}")
+
+
+def cmd_consent(action: str) -> None:
+    from catchme.background import remove_startup
+    from catchme.config import Config
+    from catchme.privacy import has_consent, revoke_consent
+
+    config = Config.from_user_settings()
+    if action == "grant":
+        _ensure_consent_interactive()
+        return
+    if action == "revoke":
+        revoke_consent(config)
+        if sys.platform == "win32":
+            remove_startup()
+        _p(f"  {GREEN}✓ consent revoked and startup entry removed{RST}")
+        return
+    status = f"{GREEN}granted{RST}" if has_consent(config) else f"{YELLOW}not granted{RST}"
+    _p(f"  recording consent: {status}")
+
+
+def cmd_background() -> None:
+    from catchme.background import run_background
+
+    raise SystemExit(run_background())
+
+
+def cmd_startup(action: str) -> None:
+    from catchme.background import (
+        install_startup,
+        remove_startup,
+        start_background_process,
+        startup_installed,
+    )
+
+    if action == "install":
+        _ensure_consent_interactive()
+        path = install_startup()
+        start_background_process()
+        _p(f"  {GREEN}✓ background startup installed and started{RST}")
+        _p(f"  {DIM}{path}{RST}")
+    elif action == "remove":
+        removed = remove_startup()
+        message = "startup entry removed" if removed else "startup entry was not installed"
+        _p(f"  {GREEN}✓ {message}{RST}")
+    else:
+        state = "installed" if startup_installed() else "not installed"
+        _p(f"  background startup: {state}")
+
+
+def cmd_sync_configure(server_url: str) -> None:
+    from urllib.parse import urlparse
+
+    from catchme.services import load_config, save_config
+    from catchme.sync import save_sync_token
+
+    parsed = urlparse(server_url)
+    if parsed.scheme.lower() != "https" or not parsed.netloc:
+        _p(f"  {RED}server URL must be a valid HTTPS URL.{RST}")
+        sys.exit(2)
+    token = getpass("  device token: ")
+    if not token:
+        _p(f"  {RED}device token is required.{RST}")
+        sys.exit(2)
+    save_sync_token(token)
+    config = load_config(reload=True)
+    config["sync"] = {
+        **config.get("sync", {}),
+        "enabled": True,
+        "server_url": server_url.rstrip("/"),
+    }
+    save_config(config)
+    _p(f"  {GREEN}✓ sync configured{RST}  {DIM}{server_url.rstrip('/')}{RST}")
+
+
+def cmd_sync_disable() -> None:
+    from catchme.services import load_config, save_config
+    from catchme.sync import delete_sync_token
+
+    config = load_config(reload=True)
+    config["sync"] = {**config.get("sync", {}), "enabled": False}
+    save_config(config)
+    delete_sync_token()
+    _p(f"  {GREEN}✓ sync disabled and stored token removed{RST}")
+
+
+def cmd_sync_now() -> None:
+    from catchme.config import Config
+    from catchme.store import Store
+    from catchme.sync import SyncClient
+
+    config = Config.from_user_settings()
+    store = Store(config.db_path)
+    try:
+        count = SyncClient(config, store).upload_once()
+    finally:
+        store.close()
+    _p(f"  {GREEN}✓ sync complete{RST}  {count} events uploaded")
+
+
+def cmd_receive(host: str, port: int, db_path: str) -> None:
+    import os
+
+    from catchme.receiver import create_receiver_app
+
+    if not os.environ.get("CATCHME_SERVER_TOKEN"):
+        _p(f"  {RED}CATCHME_SERVER_TOKEN is required.{RST}")
+        sys.exit(2)
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        _p(f"  {YELLOW}warning: terminate HTTPS and restrict access before public exposure.{RST}")
+    app = create_receiver_app(db_path)
+    app.run(host=host, port=port, debug=False, use_reloader=False)
 
 
 # ── web (frontend server) ──
@@ -643,6 +788,15 @@ def _print_help() -> None:
   {BOLD}Commands{RST}
     catchme init               Set up LLM provider & API key
     catchme awake              Start recording (backend)
+    catchme consent grant      Review and grant recording consent
+    catchme consent revoke     Revoke consent and remove startup entry
+    catchme startup install    Install and start the Windows tray runtime
+    catchme startup status     Show Windows startup status
+    catchme startup remove     Remove the Windows startup entry
+    catchme sync configure URL Configure HTTPS batch upload
+    catchme sync now           Upload pending events now
+    catchme sync disable       Disable upload and remove stored token
+    catchme receive            Run reference server receiver on localhost
     catchme web                Start web viewer (frontend)
     catchme web -p 9000        Start web viewer on custom port
     catchme ask -- <question>  Ask about your activity history
@@ -683,6 +837,51 @@ def main() -> None:
 
     elif cmd == "awake":
         cmd_awake()
+
+    elif cmd == "background":
+        cmd_background()
+
+    elif cmd == "consent":
+        action = args[1] if len(args) > 1 else "status"
+        if action not in ("grant", "revoke", "status"):
+            _p(f"  {RED}usage:{RST} catchme consent [grant|revoke|status]")
+            sys.exit(2)
+        cmd_consent(action)
+
+    elif cmd == "startup":
+        action = args[1] if len(args) > 1 else "status"
+        if action not in ("install", "remove", "status"):
+            _p(f"  {RED}usage:{RST} catchme startup [install|remove|status]")
+            sys.exit(2)
+        cmd_startup(action)
+
+    elif cmd == "sync":
+        action = args[1] if len(args) > 1 else "now"
+        if action == "configure":
+            if len(args) < 3:
+                _p(f"  {RED}usage:{RST} catchme sync configure https://server.example")
+                sys.exit(2)
+            cmd_sync_configure(args[2])
+        elif action == "now":
+            cmd_sync_now()
+        elif action == "disable":
+            cmd_sync_disable()
+        else:
+            _p(f"  {RED}usage:{RST} catchme sync [configure URL|now|disable]")
+            sys.exit(2)
+
+    elif cmd == "receive":
+        host = "127.0.0.1"
+        port = 8780
+        db_path = "catchme-server.db"
+        for i, value in enumerate(args):
+            if value == "--host" and i + 1 < len(args):
+                host = args[i + 1]
+            elif value in ("--port", "-p") and i + 1 < len(args):
+                port = int(args[i + 1])
+            elif value == "--db" and i + 1 < len(args):
+                db_path = args[i + 1]
+        cmd_receive(host, port, db_path)
 
     elif cmd == "web":
         port = None

@@ -30,6 +30,7 @@ dependencies = [
     "websockets>=12.0",
     "trafilatura>=1.8",
     "requests>=2.31",
+    "pystray>=0.19",
     # macOS native APIs
     "pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'",
     "pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'",

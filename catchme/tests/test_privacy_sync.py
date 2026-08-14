@@ -1,0 +1,193 @@
+"""Tests for privacy policy, clipboard limits, reliable sync, and receiver."""
+
+from __future__ import annotations
+
+import gzip
+import json
+import time
+from unittest import mock
+
+from catchme.config import Config
+from catchme.privacy import CapturePolicy, grant_consent, has_consent, redact_text
+from catchme.receiver import create_receiver_app
+from catchme.recorders.clipboard import ClipboardRecorder
+from catchme.store import Event, Store
+from catchme.sync import SyncClient, SyncSettings
+
+
+def test_config_loads_narrow_capture_settings(tmp_path):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "capture": {
+                    "enabled_recorders": ["window", "clipboard"],
+                    "clipboard_max_bytes": 2 * 1024 * 1024,
+                    "excluded_apps": ["vault"],
+                }
+            }
+        ),
+        "utf-8",
+    )
+
+    config = Config.from_user_settings(tmp_path)
+
+    assert config.enabled_recorders == ("window", "clipboard")
+    assert config.clipboard_max_bytes == 1024 * 1024
+    assert config.excluded_apps == ("vault",)
+
+
+def test_consent_round_trip(tmp_path):
+    config = Config(root=tmp_path)
+    assert not has_consent(config)
+    grant_consent(config)
+    assert has_consent(config)
+
+
+def test_capture_policy_excludes_sensitive_window_and_context(tmp_path):
+    config = Config(root=tmp_path, excluded_apps=("vault",))
+    policy = CapturePolicy(config)
+
+    assert policy.process("window", {"app": "My Vault", "title": "Home"}) is None
+    assert policy.process("keyboard", {"key": "secret", "type": "text"}) is None
+
+    window = policy.process("window", {"app": "Editor", "title": "notes"})
+    event = policy.process("keyboard", {"key": "hello", "type": "text"})
+    assert window is not None
+    assert event is not None
+    assert event["context"] == {"app": "Editor", "title": "notes"}
+
+
+def test_secret_redaction():
+    assert "sk-secret" not in redact_text("api_key=sk-secret-value-123456789")
+    assert "[redacted:generic_secret]" in redact_text("api_key=sk-secret-value-123456789")
+
+
+def test_clipboard_over_limit_drops_content(tmp_path):
+    config = Config(root=tmp_path, clipboard_max_bytes=4)
+    recorder = ClipboardRecorder(config)
+    received = []
+
+    with mock.patch("catchme.recorders.clipboard._read_clipboard_text", return_value="12345"):
+        recorder.poll(lambda data, blob="": received.append(data))
+
+    assert received == [
+        {
+            "type": "text/plain",
+            "dropped": True,
+            "reason": "clipboard_too_large",
+            "size_bytes": 5,
+            "max_bytes": 4,
+        }
+    ]
+
+
+def test_store_tracks_sync_acknowledgement(tmp_path):
+    store = Store(tmp_path / "events.db")
+    store.insert_raw([Event(timestamp=time.time(), kind="keyboard", data={"key": "a"})])
+    pending = store.query_unsynced()
+    assert len(pending) == 1
+    store.mark_synced([pending[0].id], time.time())
+    assert store.query_unsynced() == []
+
+
+def test_sync_client_uploads_gzip_and_marks_events(tmp_path, monkeypatch):
+    config = Config(root=tmp_path)
+    store = Store(config.db_path)
+    store.insert_raw([Event(timestamp=123.0, kind="keyboard", data={"key": "a"})])
+    monkeypatch.setenv("CATCHME_SYNC_TOKEN", "test-token")
+    settings = SyncSettings(enabled=True, server_url="https://memory.example")
+    response = mock.Mock()
+    response.raise_for_status.return_value = None
+    response.json.side_effect = lambda: {
+        "accepted": True,
+        "batch_id": post.call_args.kwargs["headers"]["X-CatchMe-Batch-ID"],
+    }
+
+    with mock.patch("catchme.sync.requests.post", return_value=response) as post:
+        count = SyncClient(config, store, settings).upload_once()
+
+    assert count == 1
+    assert store.query_unsynced() == []
+    call = post.call_args
+    assert call.args[0] == "https://memory.example/v1/events/batches"
+    assert call.kwargs["headers"]["Authorization"] == "Bearer test-token"
+    payload = json.loads(gzip.decompress(call.kwargs["data"]))
+    assert payload["events"][0]["kind"] == "keyboard"
+    assert payload["events"][0]["data"] == {"key": "a"}
+
+
+def test_sync_client_rejects_plain_http(tmp_path, monkeypatch):
+    config = Config(root=tmp_path)
+    store = Store(config.db_path)
+    store.insert_raw([Event(timestamp=123.0, kind="keyboard", data={"key": "a"})])
+    monkeypatch.setenv("CATCHME_SYNC_TOKEN", "test-token")
+    client = SyncClient(config, store, SyncSettings(enabled=True, server_url="http://bad"))
+
+    try:
+        client.upload_once()
+    except ValueError as exc:
+        assert "HTTPS" in str(exc)
+    else:
+        raise AssertionError("plain HTTP was accepted")
+
+
+def test_sync_client_keeps_events_when_acknowledgement_is_invalid(tmp_path, monkeypatch):
+    config = Config(root=tmp_path)
+    store = Store(config.db_path)
+    store.insert_raw([Event(timestamp=123.0, kind="keyboard", data={"key": "a"})])
+    monkeypatch.setenv("CATCHME_SYNC_TOKEN", "test-token")
+    response = mock.Mock()
+    response.raise_for_status.return_value = None
+    response.json.return_value = {"accepted": False, "batch_id": "wrong"}
+    client = SyncClient(
+        config,
+        store,
+        SyncSettings(enabled=True, server_url="https://memory.example"),
+    )
+
+    with mock.patch("catchme.sync.requests.post", return_value=response):
+        try:
+            client.upload_once()
+        except RuntimeError as exc:
+            assert "acknowledge" in str(exc)
+        else:
+            raise AssertionError("invalid acknowledgement was accepted")
+
+    assert len(store.query_unsynced()) == 1
+
+
+def test_receiver_is_authenticated_and_idempotent(tmp_path):
+    app = create_receiver_app(tmp_path / "server.db", token="server-token")
+    client = app.test_client()
+    payload = {
+        "batch_id": "batch-1",
+        "device_id": "device-1",
+        "events": [
+            {
+                "event_id": "device-1:1",
+                "timestamp": 123.0,
+                "kind": "keyboard",
+                "data": {"key": "a"},
+            }
+        ],
+    }
+    body = gzip.compress(json.dumps(payload).encode())
+    headers = {
+        "Authorization": "Bearer server-token",
+        "Content-Encoding": "gzip",
+        "Content-Type": "application/json",
+    }
+
+    assert client.post("/v1/events/batches", data=body).status_code == 401
+    first = client.post("/v1/events/batches", data=body, headers=headers)
+    second = client.post("/v1/events/batches", data=body, headers=headers)
+    assert first.get_json()["inserted"] == 1
+    assert second.get_json()["inserted"] == 0
+
+    exported = client.get(
+        "/v1/events/export?date=1970-01-01",
+        headers={"Authorization": "Bearer server-token"},
+    )
+    assert exported.status_code == 200
+    assert exported.get_json()["events"][0]["event_id"] == "device-1:1"
