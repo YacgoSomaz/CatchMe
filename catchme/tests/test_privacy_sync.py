@@ -338,6 +338,36 @@ def test_receiver_dashboard_private_link_renders_events(tmp_path):
                     "context": {"app": "notepad", "title": "Daily notes"},
                 },
             },
+            {
+                "event_id": "dashboard-device:command-1",
+                "timestamp": 124.0,
+                "kind": "keyboard",
+                "data": {
+                    "key": "Get-Process",
+                    "type": "text",
+                    "context": {"app": "pwsh", "title": "PowerShell"},
+                },
+            },
+            {
+                "event_id": "dashboard-device:command-enter",
+                "timestamp": 124.1,
+                "kind": "keyboard",
+                "data": {
+                    "key": "enter",
+                    "type": "special",
+                    "context": {"app": "pwsh", "title": "PowerShell"},
+                },
+            },
+            {
+                "event_id": "dashboard-device:command-2",
+                "timestamp": 124.2,
+                "kind": "keyboard",
+                "data": {
+                    "key": "git status",
+                    "type": "text",
+                    "context": {"app": "pwsh", "title": "PowerShell"},
+                },
+            },
         ],
     }
     uploaded = client.post(
@@ -355,8 +385,24 @@ def test_receiver_dashboard_private_link_renders_events(tmp_path):
     page = dashboard.get_data(as_text=True)
     assert "hello dashboard中文" in page
     assert "Daily notes" in page
-    assert "连续输入" in page
+    assert "文字输入" in page
+    assert page.count("命令输入") == 2
     assert 'class="detail">space</div>' not in page
+    assert "命令行输入" in page
+    assert "应用与进程" in page
+
+    commands = client.get(
+        "/dashboard/private-link-token?date=1970-01-01&category=command"
+    ).get_data(as_text=True)
+    assert "Get-Process" in commands
+    assert "git status" in commands
+    assert "hello dashboard" not in commands
+
+    text_entries = client.get(
+        "/dashboard/private-link-token?date=1970-01-01&category=text"
+    ).get_data(as_text=True)
+    assert "hello dashboard中文" in text_entries
+    assert "Get-Process" not in text_entries
 
     raw = client.get("/dashboard/private-link-token?date=1970-01-01&view=raw")
     assert raw.status_code == 200

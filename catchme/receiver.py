@@ -26,6 +26,15 @@ MAX_UNCOMPRESSED_BYTES = 16 * 1024 * 1024
 MAX_EVENTS_PER_BATCH = 1000
 DASHBOARD_TIMEZONE = ZoneInfo("Asia/Shanghai")
 DASHBOARD_LIMIT = 1000
+DASHBOARD_CATEGORIES = (
+    ("all", "全部分类"),
+    ("command", "命令行输入"),
+    ("text", "文字与交流"),
+    ("shortcut", "操作按键"),
+    ("process", "应用与进程"),
+    ("clipboard", "剪贴板"),
+    ("status", "活跃状态"),
+)
 
 DASHBOARD_HTML = """<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -35,16 +44,17 @@ main{max-width:1180px;margin:auto;padding:24px}.top h1{margin:0}
 .filters,.cards,.event{background:#fff;border:1px solid #e4e7ec;border-radius:14px}.filters{display:flex;gap:12px;align-items:end;padding:16px;margin:20px 0;flex-wrap:wrap}
 label{display:block;color:#475467;font-size:13px;margin-bottom:6px}input,select,button{font:inherit;padding:9px 11px;border-radius:8px;border:1px solid #d0d5dd;background:#fff}
 button{background:#175cd3;color:#fff;border-color:#175cd3;cursor:pointer}.cards{display:flex;gap:28px;padding:16px 20px;margin-bottom:14px}.metric b{display:block;font-size:24px}.metric span{color:#667085;font-size:13px}
-.events{display:grid;gap:10px}.event{padding:14px 16px}.meta{display:flex;gap:10px;align-items:center;flex-wrap:wrap;color:#667085;font-size:13px}.kind{font-weight:700;color:#175cd3;background:#eff8ff;padding:3px 8px;border-radius:99px}
+.events{display:grid;gap:10px}.event{padding:14px 16px}.meta{display:flex;gap:10px;align-items:center;flex-wrap:wrap;color:#667085;font-size:13px}.kind{font-weight:700;color:#175cd3;background:#eff8ff;padding:3px 8px;border-radius:99px}.kind.command{color:#067647;background:#ecfdf3}.kind.text{color:#6941c6;background:#f4f3ff}.kind.shortcut{color:#b54708;background:#fffaeb}.kind.process{color:#175cd3;background:#eff8ff}.kind.clipboard{color:#c11574;background:#fdf2fa}.kind.status{color:#475467;background:#f2f4f7}
 .detail{white-space:pre-wrap;overflow-wrap:anywhere;margin:10px 0 0;line-height:1.55}.context{color:#475467;font-size:13px;margin-top:8px}.empty{text-align:center;padding:48px;color:#667085;background:#fff;border-radius:14px}
 .notice{color:#667085;font-size:13px}@media(max-width:620px){main{padding:14px}.cards{gap:16px}.top{align-items:flex-start}.event{padding:12px}}
 </style></head><body><main><header class="top"><div><h1>CatchMe 日志</h1><div class="notice">时间按 Asia/Shanghai 显示</div></div></header>
 <form class="filters" method="get" action=""><div><label for="date">日期</label><input id="date" name="date" type="date" value="{{ date_text }}"></div>
 <div><label for="device">设备</label><select id="device" name="device"><option value="">全部设备</option>{% for device in devices %}<option value="{{ device.id }}" {% if device.id == selected_device %}selected{% endif %}>{{ device.name }} · {{ device.id[:8] }}</option>{% endfor %}</select></div>
+<div><label for="category">分类</label><select id="category" name="category">{% for value, label in categories %}<option value="{{ value }}" {% if value == selected_category %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
 <div><label for="view">视图</label><select id="view" name="view"><option value="readable" {% if selected_view == 'readable' %}selected{% endif %}>整理视图</option><option value="raw" {% if selected_view == 'raw' %}selected{% endif %}>原始事件</option></select></div><button type="submit">查看</button></form>
-<section class="cards"><div class="metric"><b>{{ total }}</b><span>当日原始事件</span></div><div class="metric"><b>{{ rows|length }}</b><span>{% if selected_view == 'readable' %}整理后活动{% else %}本页显示{% endif %}</span></div></section>
+<section class="cards"><div class="metric"><b>{{ total }}</b><span>当日原始事件</span></div><div class="metric"><b>{{ category_raw_count }}</b><span>当前分类原始事件</span></div><div class="metric"><b>{{ rows|length }}</b><span>{% if selected_view == 'readable' %}整理后活动{% else %}本页显示{% endif %}</span></div></section>
 {% if selected_view == 'readable' %}<p class="notice">已合并同一窗口的连续输入，并隐藏输入法确认空格、退格和方向键等编辑噪声。</p>{% endif %}
-{% if rows %}<section class="events">{% for row in rows %}<article class="event"><div class="meta"><span class="kind">{{ row.kind_label }}</span><time>{{ row.time }}</time><span>{{ row.device_name }} · {{ row.device_id[:8] }}</span></div>
+{% if rows %}<section class="events">{% for row in rows %}<article class="event"><div class="meta"><span class="kind {{ row.category }}">{{ row.kind_label }}</span><time>{{ row.time }}</time><span>{{ row.device_name }} · {{ row.device_id[:8] }}</span></div>
 <div class="detail">{{ row.detail }}</div>{% if row.app or row.title %}<div class="context">{{ row.app }}{% if row.title %} · {{ row.title }}{% endif %}</div>{% endif %}</article>{% endfor %}</section>
 {% else %}<div class="empty">这一天还没有记录</div>{% endif %}{% if total > loaded_raw_count %}<p class="notice">为保证页面流畅，本页基于最新 {{ loaded_raw_count }} 条原始事件整理。</p>{% endif %}
 </main></body></html>"""
@@ -184,6 +194,10 @@ def create_receiver_app(
             local_day = datetime.combine(today, datetime.min.time(), DASHBOARD_TIMEZONE)
         selected_device = request.args.get("device", "")
         selected_view = "raw" if request.args.get("view") == "raw" else "readable"
+        valid_categories = {value for value, _label in DASHBOARD_CATEGORIES}
+        selected_category = request.args.get("category", "all")
+        if selected_category not in valid_categories:
+            selected_category = "all"
         rows, total = _dashboard_events(
             app.config["CATCHME_DB_PATH"],
             local_day.timestamp(),
@@ -191,17 +205,25 @@ def create_receiver_app(
             selected_device,
         )
         loaded_raw_count = len(rows)
+        category_raw_count = sum(
+            1 for row in rows if selected_category == "all" or row["category"] == selected_category
+        )
         if selected_view == "readable":
             rows = _readable_dashboard_rows(rows)
+        if selected_category != "all":
+            rows = [row for row in rows if row["category"] == selected_category]
         devices = _dashboard_devices(app.config["CATCHME_DB_PATH"])
         return render_template_string(
             DASHBOARD_HTML,
             date_text=date_text,
             selected_device=selected_device,
             selected_view=selected_view,
+            selected_category=selected_category,
+            categories=DASHBOARD_CATEGORIES,
             devices=devices,
             rows=rows,
             total=total,
+            category_raw_count=category_raw_count,
             loaded_raw_count=loaded_raw_count,
         )
 
@@ -458,11 +480,14 @@ def _format_dashboard_row(row: tuple) -> dict:
     context = data.get("context") if isinstance(data.get("context"), dict) else {}
     app_name = str(data.get("app") or context.get("app") or "")
     title = str(data.get("title") or context.get("title") or "")
+    category = _dashboard_category(kind, data, app_name, title)
     labels = {
-        "keyboard": "键盘",
+        "command": "命令",
+        "text": "文字",
+        "shortcut": "操作",
+        "process": "进程",
         "clipboard": "剪贴板",
-        "window": "窗口",
-        "idle": "状态",
+        "status": "状态",
     }
     if kind == "keyboard":
         key = str(data.get("key", ""))
@@ -490,11 +515,45 @@ def _format_dashboard_row(row: tuple) -> dict:
         "kind": kind,
         "event_type": str(data.get("type", "")),
         "key": str(data.get("key", "")),
-        "kind_label": labels.get(kind, kind),
+        "category": category,
+        "kind_label": labels.get(category, kind),
         "detail": detail,
         "app": app_name,
         "title": title,
     }
+
+
+def _dashboard_category(kind: str, data: dict, app_name: str, title: str) -> str:
+    if kind == "window":
+        return "process"
+    if kind == "clipboard":
+        return "clipboard"
+    if kind == "idle":
+        return "status"
+    if kind != "keyboard":
+        return "status"
+    if data.get("type") != "text":
+        return "shortcut"
+    context_text = f"{app_name} {title}".lower()
+    terminal_markers = (
+        "windowsterminal",
+        "windows terminal",
+        "powershell",
+        "pwsh",
+        "cmd.exe",
+        "command prompt",
+        "命令提示符",
+        "终端",
+        "bash",
+        "zsh",
+        "wsl",
+        "conhost",
+        "git bash",
+        "mintty",
+    )
+    if any(marker in context_text for marker in terminal_markers):
+        return "command"
+    return "text"
 
 
 def _readable_dashboard_rows(rows: list[dict]) -> list[dict]:
@@ -540,7 +599,9 @@ def _readable_dashboard_rows(rows: list[dict]) -> list[dict]:
             if not same_session:
                 flush_pending()
                 pending = dict(row)
-                pending["kind_label"] = "连续输入"
+                pending["kind_label"] = (
+                    "命令输入" if row["category"] == "command" else "文字输入"
+                )
                 pending["start_time"] = row["time"]
                 pending["last_timestamp"] = row["timestamp"]
             else:
@@ -555,7 +616,9 @@ def _readable_dashboard_rows(rows: list[dict]) -> list[dict]:
 
         key = row["key"].lower()
         if key == "enter":
-            if pending is not None and not pending["detail"].endswith("\n"):
+            if pending is not None and pending["category"] == "command":
+                flush_pending()
+            elif pending is not None and not pending["detail"].endswith("\n"):
                 pending["detail"] += "\n"
             continue
         if key in noise_keys and row["event_type"] != "shortcut":
