@@ -14,6 +14,7 @@ import os
 import secrets
 import sqlite3
 import time
+import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -90,6 +91,29 @@ def create_receiver_app(db_path: str | Path, token: str | None = None) -> Flask:
         token, error = _enroll_device(app.config["CATCHME_DB_PATH"], code, device_id, device_name)
         if error:
             return jsonify({"error": error}), 403
+        return jsonify(
+            {
+                "device_id": device_id,
+                "device_token": token,
+                "scope": "events:write",
+            }
+        )
+
+    @app.post("/v1/devices/register")
+    def register_device():
+        """Create an upload-only identity without user-visible enrollment steps."""
+        value = request.get_json(silent=True)
+        if not isinstance(value, dict):
+            return jsonify({"error": "body must be an object"}), 400
+        device_id = str(value.get("device_id", ""))
+        device_name = str(value.get("device_name", ""))[:200]
+        try:
+            uuid.UUID(device_id)
+        except (ValueError, AttributeError):
+            return jsonify({"error": "device_id must be a UUID"}), 400
+        token, error = _register_device(app.config["CATCHME_DB_PATH"], device_id, device_name)
+        if error:
+            return jsonify({"error": error}), 409
         return jsonify(
             {
                 "device_id": device_id,
@@ -256,6 +280,22 @@ def _enroll_device(db_path: str, code: str, device_id: str, device_name: str) ->
             "created_at = excluded.created_at, revoked_at = NULL",
             (device_id, _token_hash(device_token), device_name, now),
         )
+    return device_token, ""
+
+
+def _register_device(db_path: str, device_id: str, device_name: str) -> tuple[str, str]:
+    """Register a new random device id once and return an upload-only token."""
+    now = time.time()
+    device_token = secrets.token_urlsafe(32)
+    try:
+        with _connect(db_path) as conn:
+            conn.execute(
+                "INSERT INTO device_tokens(device_id, token_hash, device_name, created_at, revoked_at) "
+                "VALUES (?, ?, ?, ?, NULL)",
+                (device_id, _token_hash(device_token), device_name, now),
+            )
+    except sqlite3.IntegrityError:
+        return "", "device_id is already registered"
     return device_token, ""
 
 

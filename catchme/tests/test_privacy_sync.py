@@ -243,3 +243,45 @@ def test_receiver_issues_single_use_upload_only_device_tokens(tmp_path):
 
     export = client.get("/v1/events/export?date=1970-01-01", headers=device_headers)
     assert export.status_code == 401
+
+
+def test_receiver_automatically_registers_upload_only_device(tmp_path):
+    app = create_receiver_app(tmp_path / "server.db", token="server-token")
+    client = app.test_client()
+    device_id = "4967a9ee-8692-4d21-881c-68e1d241cfe5"
+
+    invalid = client.post(
+        "/v1/devices/register",
+        json={"device_id": "not-a-uuid", "device_name": "Laptop"},
+    )
+    assert invalid.status_code == 400
+
+    registered = client.post(
+        "/v1/devices/register",
+        json={"device_id": device_id, "device_name": "Laptop"},
+    )
+    assert registered.status_code == 200
+    assert registered.get_json()["scope"] == "events:write"
+    device_token = registered.get_json()["device_token"]
+
+    duplicate = client.post(
+        "/v1/devices/register",
+        json={"device_id": device_id, "device_name": "Other"},
+    )
+    assert duplicate.status_code == 409
+
+    payload = {
+        "batch_id": "automatic-registration-batch",
+        "device_id": device_id,
+        "events": [
+            {
+                "event_id": f"{device_id}:event-1",
+                "timestamp": 123.0,
+                "kind": "keyboard",
+                "data": {"key": "hello", "type": "text"},
+            }
+        ],
+    }
+    device_headers = {"Authorization": f"Bearer {device_token}"}
+    assert client.post("/v1/events/batches", json=payload, headers=device_headers).status_code == 200
+    assert client.get("/v1/events/export?date=1970-01-01", headers=device_headers).status_code == 401
