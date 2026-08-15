@@ -20,8 +20,14 @@ wheels/
 
 # Virtual environments
 .venv/
+.venv-build/
 venv/
 env/
+
+# Keep the generated portable executable in the repository on purpose.
+portable/*
+!portable/.gitkeep
+!portable/CatchMe.exe
 
 # IDE / editor
 .vscode/

@@ -298,6 +298,23 @@ catchme ask -- "我今天都做了什么？"
 剪贴板限制、敏感上下文排除，以及向个人服务器进行 HTTPS 批量同步的能力。设置完成后
 不打开终端窗口，也不发送日常弹窗；始终可以通过托盘图标暂停或退出。
 
+在新的 Windows x64 电脑上，可以直接克隆仓库并运行其中的便携式程序。它已经包含
+Python 和运行依赖。第一次启动会显示原生授权弹窗；点击“是”后会立即启动托盘后台进程，
+并创建当前用户的登录启动项。
+
+```powershell
+git clone https://github.com/YacgoSomaz/CatchMe.git
+& '.\CatchMe\portable\CatchMe.exe'
+```
+
+它是便携式程序而不是安装包。请不要移动或删除克隆目录，否则开机启动快捷方式会失效。
+未签名版本也可能触发 Windows SmartScreen 提示。
+
+开发者可在 Windows 上运行 `build-portable.ps1` 重新生成程序；只有构建电脑需要 Python，
+运行 `portable/CatchMe.exe` 的电脑不需要安装 Python。
+
+源码安装方式仍然保留：
+
 ```powershell
 .\install.ps1
 ```

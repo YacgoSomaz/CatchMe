@@ -9,7 +9,6 @@ from collections.abc import Callable
 from queue import Empty, Queue
 
 from .config import Config
-from .organizer import Organizer
 from .privacy import CapturePolicy
 from .recorder import Recorder
 from .store import Event, Store
@@ -31,7 +30,13 @@ class Engine:
         self._stop = threading.Event()
         self._paused = False
         self.on_event: Callable[[Event], None] | None = None
-        self._organizer = Organizer(store, config)
+        self._organizer = None
+        if config.organizer_enabled:
+            # Keep the recorder-only portable runtime independent from the
+            # local LLM/tree pipeline.  The full source CLI still enables it.
+            from .organizer import Organizer
+
+            self._organizer = Organizer(store, config)
         self._capture_policy = CapturePolicy(config)
 
     @property
@@ -51,8 +56,9 @@ class Engine:
         self._writer = threading.Thread(target=self._write_loop, daemon=True)
         self._writer.start()
 
-        self._organizer_thread = threading.Thread(target=self._organizer.run, daemon=True)
-        self._organizer_thread.start()
+        if self._organizer is not None:
+            self._organizer_thread = threading.Thread(target=self._organizer.run, daemon=True)
+            self._organizer_thread.start()
 
         for rec in self._recorders:
             emitter = self._make_emitter(rec.kind)
@@ -69,7 +75,8 @@ class Engine:
             except Exception:
                 log.exception("failed to stop recorder: %s", rec.kind)
         self._stop.set()
-        self._organizer.stop()
+        if self._organizer is not None:
+            self._organizer.stop()
         self._writer.join(timeout=5)
         if hasattr(self, "_organizer_thread"):
             self._organizer_thread.join(timeout=5)
@@ -86,7 +93,8 @@ class Engine:
                 return
             event = Event(timestamp=time.time(), kind=kind, data=cleaned, blob=blob)
             self._queue.put(event)
-            self._organizer.on_event(event)
+            if self._organizer is not None:
+                self._organizer.on_event(event)
             if self.on_event:
                 try:
                     self.on_event(event)

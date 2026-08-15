@@ -19,6 +19,9 @@ _MUTEX_NAME = r"Local\CatchMePersonalRecorder"
 
 def run_background() -> int:
     config = Config.from_user_settings()
+    # Background capture and upload stay lightweight.  Tree building and LLM
+    # summarization belong on the server or in an explicitly launched CLI.
+    config.organizer_enabled = False
     config.ensure_dirs()
     if not has_consent(config):
         return 2
@@ -144,20 +147,17 @@ def install_startup() -> Path:
     if not has_consent(config):
         raise PermissionError("recording consent has not been granted")
 
-    python = Path(sys.executable)
-    pythonw = python.with_name("pythonw.exe")
-    if not pythonw.exists():
-        raise RuntimeError(f"pythonw.exe was not found next to {python}")
+    target, arguments, working_directory = _background_command()
 
     import win32com.client
 
     shortcut_path = startup_shortcut_path()
     shortcut = win32com.client.Dispatch("WScript.Shell").CreateShortcut(str(shortcut_path))
-    shortcut.TargetPath = str(pythonw)
-    shortcut.Arguments = "-m catchme background"
-    shortcut.WorkingDirectory = str(Path(__file__).resolve().parent.parent)
+    shortcut.TargetPath = str(target)
+    shortcut.Arguments = subprocess.list2cmdline(arguments)
+    shortcut.WorkingDirectory = str(working_directory)
     shortcut.Description = "CatchMe personal activity recorder (tray controls available)"
-    shortcut.IconLocation = str(pythonw)
+    shortcut.IconLocation = str(target)
     shortcut.Save()
     return shortcut_path
 
@@ -182,12 +182,25 @@ def start_background_process() -> None:
     config = Config.from_user_settings()
     if not has_consent(config):
         raise PermissionError("recording consent has not been granted")
-    pythonw = Path(sys.executable).with_name("pythonw.exe")
-    if not pythonw.exists():
-        raise RuntimeError(f"pythonw.exe was not found next to {sys.executable}")
+    target, arguments, working_directory = _background_command()
     subprocess.Popen(
-        [str(pythonw), "-m", "catchme", "background"],
-        cwd=str(Path(__file__).resolve().parent.parent),
+        [str(target), *arguments],
+        cwd=str(working_directory),
         close_fds=True,
-        creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+        creationflags=(
+            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        ),
     )
+
+
+def _background_command() -> tuple[Path, list[str], Path]:
+    """Return a stable launcher for source and PyInstaller runtimes."""
+    executable = Path(sys.executable).resolve()
+    if getattr(sys, "frozen", False):
+        return executable, ["background"], executable.parent
+
+    pythonw = executable.with_name("pythonw.exe")
+    if not pythonw.exists():
+        raise RuntimeError(f"pythonw.exe was not found next to {executable}")
+    return pythonw, ["-m", "catchme", "background"], Path(__file__).resolve().parent.parent

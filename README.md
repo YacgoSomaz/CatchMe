@@ -302,6 +302,25 @@ sync to a user-controlled server. After setup it opens no terminal window and
 sends no routine notifications; recording can always be paused or stopped from
 the tray icon.
 
+For a new Windows x64 computer, clone the repository and run the bundled
+portable executable. It includes Python and all runtime dependencies. The first
+launch shows a native consent dialog; accepting it starts the tray runtime
+immediately and adds the normal per-user login shortcut.
+
+```powershell
+git clone https://github.com/YacgoSomaz/CatchMe.git
+& '.\CatchMe\portable\CatchMe.exe'
+```
+
+The executable is portable rather than an installer. Keep the cloned directory
+in place so its login shortcut remains valid. An unsigned build may trigger a
+Windows SmartScreen warning.
+
+Developers can rebuild it on Windows with `build-portable.ps1`. Python is needed
+only on the build computer, not on computers running `portable/CatchMe.exe`.
+
+The source-based setup remains available:
+
 ```powershell
 .\install.ps1
 ```

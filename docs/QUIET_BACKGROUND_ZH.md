@@ -1,5 +1,21 @@
 # Windows 低打扰后台记录与服务器同步
 
+## 新电脑直接运行（无需 Python）
+
+仓库中的 `portable/CatchMe.exe` 是便携式单文件程序，不是安装包。克隆仓库后直接运行：
+
+```powershell
+git clone https://github.com/YacgoSomaz/CatchMe.git
+& '.\CatchMe\portable\CatchMe.exe'
+```
+
+首次运行会弹出 Windows 授权窗口。只有点击“是”后，程序才会保存授权、创建当前用户登录
+启动项并立即进入托盘后台。点击“否”不会启动记录或创建启动项。克隆目录需要保留在原位。
+
+若 Agent 需要在首次运行时配置服务器，可仅在该进程环境中提供
+`CATCHME_SERVER_URL` 与 `CATCHME_SYNC_TOKEN`；程序会把令牌写入 Windows 凭据管理器，
+随后从进程环境中删除它。不要把真实令牌提交到仓库。
+
 该模式用于个人设备：安装时确认一次采集范围，之后随 Windows 登录在后台启动。运行时不打开终端、不发送日常弹窗，通过系统托盘图标提供暂停、立即同步、打开数据目录和退出入口。
 
 ## 默认采集范围

@@ -43,6 +43,7 @@ class Config:
     # Engine
     batch_size: int = 100
     batch_timeout: float = 1.0
+    organizer_enabled: bool = True
 
     # Pipelines
     pipeline_poll_interval: float = 5.0
