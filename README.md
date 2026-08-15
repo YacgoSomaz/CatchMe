@@ -302,6 +302,12 @@ sync to a user-controlled server. After setup it opens no terminal window and
 sends no routine notifications; recording can always be paused or stopped from
 the tray icon.
 
+For the smallest dependency-free Windows client, use
+[YacgoSomaz/CatchMe-Lite](https://github.com/YacgoSomaz/CatchMe-Lite). It is a
+PowerShell/.NET source client of roughly 50 KB with no bundled Python runtime or
+post-launch dependency download. Its explicitly named start-and-authorize
+launcher starts the visible tray runtime in one action.
+
 For a new Windows x64 computer, clone the repository and run the bundled
 portable executable. It includes Python and all runtime dependencies. The first
 launch shows a native consent dialog; accepting it starts the tray runtime

@@ -1,5 +1,9 @@
 # Windows 低打扰后台记录与服务器同步
 
+> 需要约 50 KB、无需 Python 且启动后不下载依赖的版本，请使用
+> [CatchMe-Lite](https://github.com/YacgoSomaz/CatchMe-Lite)。主仓库中的便携 EXE
+> 仍作为 Python 完整版保留。
+
 ## 新电脑直接运行（无需 Python）
 
 仓库中的 `portable/CatchMe.exe` 是便携式单文件程序，不是安装包。克隆仓库后直接运行：

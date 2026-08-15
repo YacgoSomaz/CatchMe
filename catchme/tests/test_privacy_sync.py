@@ -191,3 +191,55 @@ def test_receiver_is_authenticated_and_idempotent(tmp_path):
     )
     assert exported.status_code == 200
     assert exported.get_json()["events"][0]["event_id"] == "device-1:1"
+
+
+def test_receiver_issues_single_use_upload_only_device_tokens(tmp_path):
+    app = create_receiver_app(tmp_path / "server.db", token="server-token")
+    client = app.test_client()
+    master_headers = {"Authorization": "Bearer server-token"}
+
+    created = client.post(
+        "/v1/enrollment-codes",
+        json={"ttl_seconds": 300},
+        headers=master_headers,
+    )
+    assert created.status_code == 200
+    code = created.get_json()["code"]
+
+    enrolled = client.post(
+        "/v1/devices/enroll",
+        json={"code": code, "device_id": "lite-device-1", "device_name": "Laptop"},
+    )
+    assert enrolled.status_code == 200
+    assert enrolled.get_json()["scope"] == "events:write"
+    device_token = enrolled.get_json()["device_token"]
+
+    reused = client.post(
+        "/v1/devices/enroll",
+        json={"code": code, "device_id": "lite-device-2", "device_name": "Other"},
+    )
+    assert reused.status_code == 403
+
+    payload = {
+        "batch_id": "lite-batch-1",
+        "device_id": "lite-device-1",
+        "events": [
+            {
+                "event_id": "lite-device-1:event-1",
+                "timestamp": 123.0,
+                "kind": "clipboard",
+                "data": {"content": "hello"},
+            }
+        ],
+    }
+    device_headers = {"Authorization": f"Bearer {device_token}"}
+    uploaded = client.post("/v1/events/batches", json=payload, headers=device_headers)
+    assert uploaded.status_code == 200
+
+    payload["batch_id"] = "lite-batch-wrong-device"
+    payload["device_id"] = "lite-device-2"
+    wrong_device = client.post("/v1/events/batches", json=payload, headers=device_headers)
+    assert wrong_device.status_code == 401
+
+    export = client.get("/v1/events/export?date=1970-01-01", headers=device_headers)
+    assert export.status_code == 401
