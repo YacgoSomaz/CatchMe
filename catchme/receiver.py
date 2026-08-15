@@ -17,18 +17,68 @@ import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, render_template_string, request, session
 
 MAX_COMPRESSED_BYTES = 5 * 1024 * 1024
 MAX_UNCOMPRESSED_BYTES = 16 * 1024 * 1024
 MAX_EVENTS_PER_BATCH = 1000
+DASHBOARD_TIMEZONE = ZoneInfo("Asia/Shanghai")
+DASHBOARD_LIMIT = 1000
+
+DASHBOARD_LOGIN_HTML = """<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CatchMe 日志</title><style>
+body{margin:0;background:#f4f6f8;color:#18202a;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+.box{max-width:380px;margin:12vh auto;background:#fff;padding:32px;border-radius:18px;box-shadow:0 12px 40px #17203318}
+h1{margin:0 0 8px;font-size:26px}.muted{color:#667085;margin:0 0 24px}.error{color:#b42318;background:#fef3f2;padding:10px;border-radius:8px}
+label{display:block;font-weight:600;margin:18px 0 8px}input,button{box-sizing:border-box;width:100%;font:inherit;padding:12px;border-radius:10px}
+input{border:1px solid #d0d5dd}button{margin-top:16px;border:0;background:#175cd3;color:#fff;font-weight:700;cursor:pointer}
+</style></head><body><main class="box"><h1>CatchMe 日志</h1><p class="muted">输入独立的网页查看密码</p>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}<form method="post" action=""><label for="password">查看密码</label>
+<input id="password" name="password" type="password" autocomplete="current-password" required autofocus><button type="submit">进入日志</button></form>
+</main></body></html>"""
+
+DASHBOARD_HTML = """<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CatchMe 日志</title><style>
+:root{color-scheme:light}body{margin:0;background:#f4f6f8;color:#18202a;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:1180px;margin:auto;padding:24px}.top{display:flex;justify-content:space-between;gap:16px;align-items:center}.top h1{margin:0}.top a{color:#475467}
+.filters,.cards,.event{background:#fff;border:1px solid #e4e7ec;border-radius:14px}.filters{display:flex;gap:12px;align-items:end;padding:16px;margin:20px 0;flex-wrap:wrap}
+label{display:block;color:#475467;font-size:13px;margin-bottom:6px}input,select,button{font:inherit;padding:9px 11px;border-radius:8px;border:1px solid #d0d5dd;background:#fff}
+button{background:#175cd3;color:#fff;border-color:#175cd3;cursor:pointer}.cards{display:flex;gap:28px;padding:16px 20px;margin-bottom:14px}.metric b{display:block;font-size:24px}.metric span{color:#667085;font-size:13px}
+.events{display:grid;gap:10px}.event{padding:14px 16px}.meta{display:flex;gap:10px;align-items:center;flex-wrap:wrap;color:#667085;font-size:13px}.kind{font-weight:700;color:#175cd3;background:#eff8ff;padding:3px 8px;border-radius:99px}
+.detail{white-space:pre-wrap;overflow-wrap:anywhere;margin:10px 0 0;line-height:1.55}.context{color:#475467;font-size:13px;margin-top:8px}.empty{text-align:center;padding:48px;color:#667085;background:#fff;border-radius:14px}
+.notice{color:#667085;font-size:13px}@media(max-width:620px){main{padding:14px}.cards{gap:16px}.top{align-items:flex-start}.event{padding:12px}}
+</style></head><body><main><header class="top"><div><h1>CatchMe 日志</h1><div class="notice">时间按 Asia/Shanghai 显示</div></div><a href="?logout=1">退出</a></header>
+<form class="filters" method="get" action=""><div><label for="date">日期</label><input id="date" name="date" type="date" value="{{ date_text }}"></div>
+<div><label for="device">设备</label><select id="device" name="device"><option value="">全部设备</option>{% for device in devices %}<option value="{{ device.id }}" {% if device.id == selected_device %}selected{% endif %}>{{ device.name }} · {{ device.id[:8] }}</option>{% endfor %}</select></div><button type="submit">查看</button></form>
+<section class="cards"><div class="metric"><b>{{ total }}</b><span>当日事件</span></div><div class="metric"><b>{{ rows|length }}</b><span>本页显示</span></div></section>
+{% if rows %}<section class="events">{% for row in rows %}<article class="event"><div class="meta"><span class="kind">{{ row.kind_label }}</span><time>{{ row.time }}</time><span>{{ row.device_name }} · {{ row.device_id[:8] }}</span></div>
+<div class="detail">{{ row.detail }}</div>{% if row.app or row.title %}<div class="context">{{ row.app }}{% if row.title %} · {{ row.title }}{% endif %}</div>{% endif %}</article>{% endfor %}</section>
+{% else %}<div class="empty">这一天还没有记录</div>{% endif %}{% if total > rows|length %}<p class="notice">为保证页面流畅，仅显示最新 {{ rows|length }} 条。</p>{% endif %}
+</main></body></html>"""
 
 
-def create_receiver_app(db_path: str | Path, token: str | None = None) -> Flask:
+def create_receiver_app(
+    db_path: str | Path,
+    token: str | None = None,
+    dashboard_password: str | None = None,
+    dashboard_secret: str | None = None,
+) -> Flask:
     app = Flask("catchme-receiver")
     app.config["CATCHME_DB_PATH"] = str(db_path)
     app.config["CATCHME_SERVER_TOKEN"] = token or os.environ.get("CATCHME_SERVER_TOKEN", "")
+    app.config["CATCHME_DASHBOARD_PASSWORD"] = dashboard_password or os.environ.get(
+        "CATCHME_DASHBOARD_PASSWORD", ""
+    )
+    app.secret_key = dashboard_secret or os.environ.get("CATCHME_DASHBOARD_SESSION_SECRET") or secrets.token_hex(32)
+    app.config.update(
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE="Strict",
+        SESSION_COOKIE_SECURE=True,
+    )
     _init_db(app.config["CATCHME_DB_PATH"])
 
     @app.get("/health")
@@ -135,6 +185,50 @@ def create_receiver_app(db_path: str | Path, token: str | None = None) -> Flask:
             app.config["CATCHME_DB_PATH"], day.timestamp(), (day + timedelta(days=1)).timestamp()
         )
         return jsonify({"date": date_text, "events": rows})
+
+    @app.route("/dashboard", methods=["GET", "POST"])
+    def dashboard():
+        password = app.config.get("CATCHME_DASHBOARD_PASSWORD", "")
+        if not password:
+            return "Dashboard is not configured.", 503
+        if request.args.get("logout") == "1":
+            session.pop("catchme_dashboard", None)
+        error = ""
+        if request.method == "POST":
+            provided = request.form.get("password", "")
+            if hmac.compare_digest(password, provided):
+                session["catchme_dashboard"] = True
+            else:
+                error = "密码错误"
+        if session.get("catchme_dashboard") is not True:
+            status = 401 if error else 200
+            return render_template_string(DASHBOARD_LOGIN_HTML, error=error), status
+
+        today = datetime.now(DASHBOARD_TIMEZONE).date()
+        date_text = request.args.get("date", today.isoformat())
+        try:
+            local_day = datetime.strptime(date_text, "%Y-%m-%d").replace(
+                tzinfo=DASHBOARD_TIMEZONE
+            )
+        except ValueError:
+            date_text = today.isoformat()
+            local_day = datetime.combine(today, datetime.min.time(), DASHBOARD_TIMEZONE)
+        selected_device = request.args.get("device", "")
+        rows, total = _dashboard_events(
+            app.config["CATCHME_DB_PATH"],
+            local_day.timestamp(),
+            (local_day + timedelta(days=1)).timestamp(),
+            selected_device,
+        )
+        devices = _dashboard_devices(app.config["CATCHME_DB_PATH"])
+        return render_template_string(
+            DASHBOARD_HTML,
+            date_text=date_text,
+            selected_device=selected_device,
+            devices=devices,
+            rows=rows,
+            total=total,
+        )
 
     return app
 
@@ -345,3 +439,80 @@ def _export_day(db_path: str, start: float, end: float) -> list[dict]:
         }
         for row in rows
     ]
+
+
+def _dashboard_devices(db_path: str) -> list[dict]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT device_id, device_name FROM device_tokens "
+            "WHERE revoked_at IS NULL ORDER BY device_name, device_id"
+        ).fetchall()
+    return [{"id": row[0], "name": row[1] or "未命名设备"} for row in rows]
+
+
+def _dashboard_events(
+    db_path: str,
+    start: float,
+    end: float,
+    device_id: str,
+) -> tuple[list[dict], int]:
+    where = "event_time >= ? AND event_time < ?"
+    values: list[object] = [start, end]
+    if device_id:
+        where += " AND received_events.device_id = ?"
+        values.append(device_id)
+    with _connect(db_path) as conn:
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM received_events WHERE {where}",  # noqa: S608
+            values,
+        ).fetchone()[0]
+        rows = conn.execute(
+            "SELECT received_events.device_id, event_time, kind, data, "
+            "COALESCE(device_tokens.device_name, '') "
+            "FROM received_events LEFT JOIN device_tokens "
+            "ON received_events.device_id = device_tokens.device_id "
+            f"WHERE {where} ORDER BY event_time DESC LIMIT ?",  # noqa: S608
+            [*values, DASHBOARD_LIMIT],
+        ).fetchall()
+    return [_format_dashboard_row(row) for row in rows], int(total)
+
+
+def _format_dashboard_row(row: tuple) -> dict:
+    device_id, event_time, kind, data_text, device_name = row
+    data = json.loads(data_text)
+    context = data.get("context") if isinstance(data.get("context"), dict) else {}
+    app_name = str(data.get("app") or context.get("app") or "")
+    title = str(data.get("title") or context.get("title") or "")
+    labels = {
+        "keyboard": "键盘",
+        "clipboard": "剪贴板",
+        "window": "窗口",
+        "idle": "状态",
+    }
+    if kind == "keyboard":
+        key = str(data.get("key", ""))
+        modifiers = "+".join(str(value) for value in data.get("modifiers", []))
+        detail = f"{modifiers}+{key}" if modifiers else key
+    elif kind == "clipboard":
+        if data.get("dropped"):
+            detail = f"内容未保存：{data.get('reason', '已跳过')}"
+        else:
+            detail = str(data.get("content", ""))
+    elif kind == "window":
+        detail = title or app_name or "窗口切换"
+    elif kind == "idle":
+        detail = "空闲" if data.get("status") == "idle" else "恢复活动"
+    else:
+        detail = json.dumps(data, ensure_ascii=False)
+    if len(detail) > 4000:
+        detail = detail[:4000] + "\n…（页面已截断）"
+    local_time = datetime.fromtimestamp(float(event_time), UTC).astimezone(DASHBOARD_TIMEZONE)
+    return {
+        "device_id": device_id,
+        "device_name": device_name or "未命名设备",
+        "time": local_time.strftime("%H:%M:%S"),
+        "kind_label": labels.get(kind, kind),
+        "detail": detail,
+        "app": app_name,
+        "title": title,
+    }

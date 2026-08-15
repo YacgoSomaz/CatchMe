@@ -285,3 +285,62 @@ def test_receiver_automatically_registers_upload_only_device(tmp_path):
     device_headers = {"Authorization": f"Bearer {device_token}"}
     assert client.post("/v1/events/batches", json=payload, headers=device_headers).status_code == 200
     assert client.get("/v1/events/export?date=1970-01-01", headers=device_headers).status_code == 401
+
+
+def test_receiver_dashboard_requires_password_and_renders_events(tmp_path):
+    app = create_receiver_app(
+        tmp_path / "server.db",
+        token="server-token",
+        dashboard_password="view-password",
+        dashboard_secret="test-session-secret",
+    )
+    client = app.test_client()
+    payload = {
+        "batch_id": "dashboard-batch",
+        "device_id": "dashboard-device",
+        "events": [
+            {
+                "event_id": "dashboard-device:event-1",
+                "timestamp": 123.0,
+                "kind": "keyboard",
+                "data": {
+                    "key": "hello dashboard",
+                    "type": "text",
+                    "context": {"app": "notepad", "title": "Daily notes"},
+                },
+            }
+        ],
+    }
+    uploaded = client.post(
+        "/v1/events/batches",
+        json=payload,
+        headers={"Authorization": "Bearer server-token"},
+    )
+    assert uploaded.status_code == 200
+
+    login = client.get("/dashboard", base_url="https://localhost")
+    assert login.status_code == 200
+    assert "hello dashboard" not in login.get_data(as_text=True)
+
+    wrong = client.post(
+        "/dashboard?date=1970-01-01",
+        data={"password": "wrong"},
+        base_url="https://localhost",
+    )
+    assert wrong.status_code == 401
+
+    dashboard = client.post(
+        "/dashboard?date=1970-01-01",
+        data={"password": "view-password"},
+        base_url="https://localhost",
+    )
+    assert dashboard.status_code == 200
+    page = dashboard.get_data(as_text=True)
+    assert "hello dashboard" in page
+    assert "Daily notes" in page
+
+    logout = client.get(
+        "/dashboard?logout=1",
+        base_url="https://localhost",
+    )
+    assert "hello dashboard" not in logout.get_data(as_text=True)
