@@ -339,6 +339,16 @@ def test_receiver_dashboard_private_link_renders_events(tmp_path):
                 },
             },
             {
+                "event_id": "dashboard-device:placeholder",
+                "timestamp": 123.4,
+                "kind": "keyboard",
+                "data": {
+                    "key": "随心输入",
+                    "type": "text",
+                    "context": {"app": "ChatGPT", "title": "ChatGPT"},
+                },
+            },
+            {
                 "event_id": "dashboard-device:command-1",
                 "timestamp": 124.0,
                 "kind": "keyboard",
@@ -388,8 +398,17 @@ def test_receiver_dashboard_private_link_renders_events(tmp_path):
     assert "文字输入" in page
     assert page.count("命令输入") == 2
     assert 'class="detail">space</div>' not in page
+    assert "随心输入" not in page
     assert "命令行输入" in page
     assert "应用与进程" in page
+
+    searched = client.get(
+        "/dashboard/private-link-token",
+        query_string={"date": "1970-01-01", "q": "随心输入"},
+    )
+    assert searched.status_code == 200
+    assert "随心输入" in searched.get_data(as_text=True)
+    assert "占位提示也会在搜索结果中显示" in searched.get_data(as_text=True)
 
     commands = client.get(
         "/dashboard/private-link-token?date=1970-01-01&category=command"

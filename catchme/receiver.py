@@ -35,6 +35,17 @@ DASHBOARD_CATEGORIES = (
     ("clipboard", "剪贴板"),
     ("status", "活跃状态"),
 )
+DASHBOARD_PLACEHOLDERS = {
+    "随心输入",
+    "请输入内容",
+    "请输入消息",
+    "输入消息",
+    "写消息",
+    "发送消息",
+    "type a message",
+    "message",
+    "ask anything",
+}
 
 DASHBOARD_HTML = """<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -42,7 +53,7 @@ DASHBOARD_HTML = """<!doctype html>
 :root{color-scheme:light}body{margin:0;background:#f4f6f8;color:#18202a;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
 main{max-width:1180px;margin:auto;padding:24px}.top h1{margin:0}
 .filters,.cards,.event{background:#fff;border:1px solid #e4e7ec;border-radius:14px}.filters{display:flex;gap:12px;align-items:end;padding:16px;margin:20px 0;flex-wrap:wrap}
-label{display:block;color:#475467;font-size:13px;margin-bottom:6px}input,select,button{font:inherit;padding:9px 11px;border-radius:8px;border:1px solid #d0d5dd;background:#fff}
+label{display:block;color:#475467;font-size:13px;margin-bottom:6px}input,select,button{font:inherit;padding:9px 11px;border-radius:8px;border:1px solid #d0d5dd;background:#fff}.search{min-width:260px;flex:1}.search input{box-sizing:border-box;width:100%}
 button{background:#175cd3;color:#fff;border-color:#175cd3;cursor:pointer}.cards{display:flex;gap:28px;padding:16px 20px;margin-bottom:14px}.metric b{display:block;font-size:24px}.metric span{color:#667085;font-size:13px}
 .events{display:grid;gap:10px}.event{padding:14px 16px}.meta{display:flex;gap:10px;align-items:center;flex-wrap:wrap;color:#667085;font-size:13px}.kind{font-weight:700;color:#175cd3;background:#eff8ff;padding:3px 8px;border-radius:99px}.kind.command{color:#067647;background:#ecfdf3}.kind.text{color:#6941c6;background:#f4f3ff}.kind.shortcut{color:#b54708;background:#fffaeb}.kind.process{color:#175cd3;background:#eff8ff}.kind.clipboard{color:#c11574;background:#fdf2fa}.kind.status{color:#475467;background:#f2f4f7}
 .detail{white-space:pre-wrap;overflow-wrap:anywhere;margin:10px 0 0;line-height:1.55}.context{color:#475467;font-size:13px;margin-top:8px}.empty{text-align:center;padding:48px;color:#667085;background:#fff;border-radius:14px}
@@ -51,9 +62,10 @@ button{background:#175cd3;color:#fff;border-color:#175cd3;cursor:pointer}.cards{
 <form class="filters" method="get" action=""><div><label for="date">日期</label><input id="date" name="date" type="date" value="{{ date_text }}"></div>
 <div><label for="device">设备</label><select id="device" name="device"><option value="">全部设备</option>{% for device in devices %}<option value="{{ device.id }}" {% if device.id == selected_device %}selected{% endif %}>{{ device.name }} · {{ device.id[:8] }}</option>{% endfor %}</select></div>
 <div><label for="category">分类</label><select id="category" name="category">{% for value, label in categories %}<option value="{{ value }}" {% if value == selected_category %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
-<div><label for="view">视图</label><select id="view" name="view"><option value="readable" {% if selected_view == 'readable' %}selected{% endif %}>整理视图</option><option value="raw" {% if selected_view == 'raw' %}selected{% endif %}>原始事件</option></select></div><button type="submit">查看</button></form>
+<div><label for="view">视图</label><select id="view" name="view"><option value="readable" {% if selected_view == 'readable' %}selected{% endif %}>整理视图</option><option value="raw" {% if selected_view == 'raw' %}selected{% endif %}>原始事件</option></select></div>
+<div class="search"><label for="q">搜索</label><input id="q" name="q" type="search" value="{{ search_query }}" placeholder="搜索文字、命令、窗口或应用"></div><button type="submit">查看</button></form>
 <section class="cards"><div class="metric"><b>{{ total }}</b><span>当日原始事件</span></div><div class="metric"><b>{{ category_raw_count }}</b><span>当前分类原始事件</span></div><div class="metric"><b>{{ rows|length }}</b><span>{% if selected_view == 'readable' %}整理后活动{% else %}本页显示{% endif %}</span></div></section>
-{% if selected_view == 'readable' %}<p class="notice">已合并同一窗口的连续输入，并隐藏输入法确认空格、退格和方向键等编辑噪声。</p>{% endif %}
+{% if search_query %}<p class="notice">正在搜索“{{ search_query }}”；占位提示也会在搜索结果中显示。</p>{% elif selected_view == 'readable' %}<p class="notice">已合并连续输入，并隐藏输入法确认空格、编辑按键及常见占位提示。</p>{% endif %}
 {% if rows %}<section class="events">{% for row in rows %}<article class="event"><div class="meta"><span class="kind {{ row.category }}">{{ row.kind_label }}</span><time>{{ row.time }}</time><span>{{ row.device_name }} · {{ row.device_id[:8] }}</span></div>
 <div class="detail">{{ row.detail }}</div>{% if row.app or row.title %}<div class="context">{{ row.app }}{% if row.title %} · {{ row.title }}{% endif %}</div>{% endif %}</article>{% endfor %}</section>
 {% else %}<div class="empty">这一天还没有记录</div>{% endif %}{% if total > loaded_raw_count %}<p class="notice">为保证页面流畅，本页基于最新 {{ loaded_raw_count }} 条原始事件整理。</p>{% endif %}
@@ -194,6 +206,7 @@ def create_receiver_app(
             local_day = datetime.combine(today, datetime.min.time(), DASHBOARD_TIMEZONE)
         selected_device = request.args.get("device", "")
         selected_view = "raw" if request.args.get("view") == "raw" else "readable"
+        search_query = request.args.get("q", "").strip()[:200]
         valid_categories = {value for value, _label in DASHBOARD_CATEGORIES}
         selected_category = request.args.get("category", "all")
         if selected_category not in valid_categories:
@@ -205,6 +218,8 @@ def create_receiver_app(
             selected_device,
         )
         loaded_raw_count = len(rows)
+        if not search_query:
+            rows = [row for row in rows if not _is_dashboard_placeholder(row)]
         category_raw_count = sum(
             1 for row in rows if selected_category == "all" or row["category"] == selected_category
         )
@@ -212,6 +227,9 @@ def create_receiver_app(
             rows = _readable_dashboard_rows(rows)
         if selected_category != "all":
             rows = [row for row in rows if row["category"] == selected_category]
+        if search_query:
+            search_value = search_query.casefold()
+            rows = [row for row in rows if _dashboard_row_matches(row, search_value)]
         devices = _dashboard_devices(app.config["CATCHME_DB_PATH"])
         return render_template_string(
             DASHBOARD_HTML,
@@ -219,6 +237,7 @@ def create_receiver_app(
             selected_device=selected_device,
             selected_view=selected_view,
             selected_category=selected_category,
+            search_query=search_query,
             categories=DASHBOARD_CATEGORIES,
             devices=devices,
             rows=rows,
@@ -554,6 +573,25 @@ def _dashboard_category(kind: str, data: dict, app_name: str, title: str) -> str
     if any(marker in context_text for marker in terminal_markers):
         return "command"
     return "text"
+
+
+def _is_dashboard_placeholder(row: dict) -> bool:
+    if row["category"] != "text" or row["event_type"] != "text":
+        return False
+    value = row["key"].casefold().strip(" \t\r\n.…。:：")
+    return value in DASHBOARD_PLACEHOLDERS
+
+
+def _dashboard_row_matches(row: dict, search_value: str) -> bool:
+    fields = (
+        row["detail"],
+        row["app"],
+        row["title"],
+        row["kind_label"],
+        row["device_name"],
+        row["category"],
+    )
+    return any(search_value in str(value).casefold() for value in fields)
 
 
 def _readable_dashboard_rows(rows: list[dict]) -> list[dict]:
