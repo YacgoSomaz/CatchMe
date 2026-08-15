@@ -576,9 +576,13 @@ def _dashboard_category(kind: str, data: dict, app_name: str, title: str) -> str
 
 
 def _is_dashboard_placeholder(row: dict) -> bool:
-    if row["category"] != "text" or row["event_type"] != "text":
+    if row["category"] == "text" and row["event_type"] == "text":
+        candidate = row["key"]
+    elif row["category"] == "clipboard":
+        candidate = row["detail"]
+    else:
         return False
-    value = row["key"].casefold().strip(" \t\r\n.…。:：")
+    value = candidate.casefold().strip(" \t\r\n.…。:：")
     return value in DASHBOARD_PLACEHOLDERS
 
 

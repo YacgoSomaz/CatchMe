@@ -349,6 +349,15 @@ def test_receiver_dashboard_private_link_renders_events(tmp_path):
                 },
             },
             {
+                "event_id": "dashboard-device:placeholder-clipboard",
+                "timestamp": 123.5,
+                "kind": "clipboard",
+                "data": {
+                    "content": "随心输入",
+                    "context": {"app": "ChatGPT", "title": "ChatGPT"},
+                },
+            },
+            {
                 "event_id": "dashboard-device:command-1",
                 "timestamp": 124.0,
                 "kind": "keyboard",
