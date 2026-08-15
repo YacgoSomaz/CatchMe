@@ -299,6 +299,16 @@ def test_receiver_dashboard_private_link_renders_events(tmp_path):
         "device_id": "dashboard-device",
         "events": [
             {
+                "event_id": "dashboard-device:ime-space-1",
+                "timestamp": 122.9,
+                "kind": "keyboard",
+                "data": {
+                    "key": "space",
+                    "type": "special",
+                    "context": {"app": "notepad", "title": "Daily notes"},
+                },
+            },
+            {
                 "event_id": "dashboard-device:event-1",
                 "timestamp": 123.0,
                 "kind": "keyboard",
@@ -307,7 +317,27 @@ def test_receiver_dashboard_private_link_renders_events(tmp_path):
                     "type": "text",
                     "context": {"app": "notepad", "title": "Daily notes"},
                 },
-            }
+            },
+            {
+                "event_id": "dashboard-device:ime-space-2",
+                "timestamp": 123.1,
+                "kind": "keyboard",
+                "data": {
+                    "key": "space",
+                    "type": "special",
+                    "context": {"app": "notepad", "title": "Daily notes"},
+                },
+            },
+            {
+                "event_id": "dashboard-device:event-2",
+                "timestamp": 123.2,
+                "kind": "keyboard",
+                "data": {
+                    "key": "中文",
+                    "type": "text",
+                    "context": {"app": "notepad", "title": "Daily notes"},
+                },
+            },
         ],
     }
     uploaded = client.post(
@@ -323,5 +353,11 @@ def test_receiver_dashboard_private_link_renders_events(tmp_path):
     dashboard = client.get("/dashboard/private-link-token?date=1970-01-01")
     assert dashboard.status_code == 200
     page = dashboard.get_data(as_text=True)
-    assert "hello dashboard" in page
+    assert "hello dashboard中文" in page
     assert "Daily notes" in page
+    assert "连续输入" in page
+    assert 'class="detail">space</div>' not in page
+
+    raw = client.get("/dashboard/private-link-token?date=1970-01-01&view=raw")
+    assert raw.status_code == 200
+    assert 'class="detail">space</div>' in raw.get_data(as_text=True)

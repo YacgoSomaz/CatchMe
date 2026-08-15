@@ -40,11 +40,13 @@ button{background:#175cd3;color:#fff;border-color:#175cd3;cursor:pointer}.cards{
 .notice{color:#667085;font-size:13px}@media(max-width:620px){main{padding:14px}.cards{gap:16px}.top{align-items:flex-start}.event{padding:12px}}
 </style></head><body><main><header class="top"><div><h1>CatchMe 日志</h1><div class="notice">时间按 Asia/Shanghai 显示</div></div></header>
 <form class="filters" method="get" action=""><div><label for="date">日期</label><input id="date" name="date" type="date" value="{{ date_text }}"></div>
-<div><label for="device">设备</label><select id="device" name="device"><option value="">全部设备</option>{% for device in devices %}<option value="{{ device.id }}" {% if device.id == selected_device %}selected{% endif %}>{{ device.name }} · {{ device.id[:8] }}</option>{% endfor %}</select></div><button type="submit">查看</button></form>
-<section class="cards"><div class="metric"><b>{{ total }}</b><span>当日事件</span></div><div class="metric"><b>{{ rows|length }}</b><span>本页显示</span></div></section>
+<div><label for="device">设备</label><select id="device" name="device"><option value="">全部设备</option>{% for device in devices %}<option value="{{ device.id }}" {% if device.id == selected_device %}selected{% endif %}>{{ device.name }} · {{ device.id[:8] }}</option>{% endfor %}</select></div>
+<div><label for="view">视图</label><select id="view" name="view"><option value="readable" {% if selected_view == 'readable' %}selected{% endif %}>整理视图</option><option value="raw" {% if selected_view == 'raw' %}selected{% endif %}>原始事件</option></select></div><button type="submit">查看</button></form>
+<section class="cards"><div class="metric"><b>{{ total }}</b><span>当日原始事件</span></div><div class="metric"><b>{{ rows|length }}</b><span>{% if selected_view == 'readable' %}整理后活动{% else %}本页显示{% endif %}</span></div></section>
+{% if selected_view == 'readable' %}<p class="notice">已合并同一窗口的连续输入，并隐藏输入法确认空格、退格和方向键等编辑噪声。</p>{% endif %}
 {% if rows %}<section class="events">{% for row in rows %}<article class="event"><div class="meta"><span class="kind">{{ row.kind_label }}</span><time>{{ row.time }}</time><span>{{ row.device_name }} · {{ row.device_id[:8] }}</span></div>
 <div class="detail">{{ row.detail }}</div>{% if row.app or row.title %}<div class="context">{{ row.app }}{% if row.title %} · {{ row.title }}{% endif %}</div>{% endif %}</article>{% endfor %}</section>
-{% else %}<div class="empty">这一天还没有记录</div>{% endif %}{% if total > rows|length %}<p class="notice">为保证页面流畅，仅显示最新 {{ rows|length }} 条。</p>{% endif %}
+{% else %}<div class="empty">这一天还没有记录</div>{% endif %}{% if total > loaded_raw_count %}<p class="notice">为保证页面流畅，本页基于最新 {{ loaded_raw_count }} 条原始事件整理。</p>{% endif %}
 </main></body></html>"""
 
 
@@ -181,20 +183,26 @@ def create_receiver_app(
             date_text = today.isoformat()
             local_day = datetime.combine(today, datetime.min.time(), DASHBOARD_TIMEZONE)
         selected_device = request.args.get("device", "")
+        selected_view = "raw" if request.args.get("view") == "raw" else "readable"
         rows, total = _dashboard_events(
             app.config["CATCHME_DB_PATH"],
             local_day.timestamp(),
             (local_day + timedelta(days=1)).timestamp(),
             selected_device,
         )
+        loaded_raw_count = len(rows)
+        if selected_view == "readable":
+            rows = _readable_dashboard_rows(rows)
         devices = _dashboard_devices(app.config["CATCHME_DB_PATH"])
         return render_template_string(
             DASHBOARD_HTML,
             date_text=date_text,
             selected_device=selected_device,
+            selected_view=selected_view,
             devices=devices,
             rows=rows,
             total=total,
+            loaded_raw_count=loaded_raw_count,
         )
 
     return app
@@ -477,9 +485,83 @@ def _format_dashboard_row(row: tuple) -> dict:
     return {
         "device_id": device_id,
         "device_name": device_name or "未命名设备",
+        "timestamp": float(event_time),
         "time": local_time.strftime("%H:%M:%S"),
+        "kind": kind,
+        "event_type": str(data.get("type", "")),
+        "key": str(data.get("key", "")),
         "kind_label": labels.get(kind, kind),
         "detail": detail,
         "app": app_name,
         "title": title,
     }
+
+
+def _readable_dashboard_rows(rows: list[dict]) -> list[dict]:
+    """Turn low-level keyboard events into readable input sessions."""
+    activities: list[dict] = []
+    pending: dict | None = None
+    noise_keys = {
+        "space",
+        "backspace",
+        "delete",
+        "left",
+        "right",
+        "up",
+        "down",
+        "home",
+        "end",
+        "pageup",
+        "pagedown",
+        "tab",
+        "escape",
+    }
+
+    def flush_pending() -> None:
+        nonlocal pending
+        if pending is not None and pending["detail"].strip():
+            activities.append(pending)
+        pending = None
+
+    for row in reversed(rows):
+        if row["kind"] != "keyboard":
+            flush_pending()
+            activities.append(row)
+            continue
+
+        if row["event_type"] == "text":
+            same_session = (
+                pending is not None
+                and pending["device_id"] == row["device_id"]
+                and pending["app"] == row["app"]
+                and pending["title"] == row["title"]
+                and row["timestamp"] - pending["last_timestamp"] <= 20
+            )
+            if not same_session:
+                flush_pending()
+                pending = dict(row)
+                pending["kind_label"] = "连续输入"
+                pending["start_time"] = row["time"]
+                pending["last_timestamp"] = row["timestamp"]
+            else:
+                pending["detail"] += row["key"]
+                pending["last_timestamp"] = row["timestamp"]
+                if row["time"] != pending["start_time"]:
+                    pending["time"] = f"{pending['start_time']}–{row['time']}"
+            if len(pending["detail"]) > 8000:
+                pending["detail"] = pending["detail"][:8000] + "\n…（整理视图已截断）"
+                flush_pending()
+            continue
+
+        key = row["key"].lower()
+        if key == "enter":
+            if pending is not None and not pending["detail"].endswith("\n"):
+                pending["detail"] += "\n"
+            continue
+        if key in noise_keys and row["event_type"] != "shortcut":
+            continue
+        flush_pending()
+        activities.append(row)
+
+    flush_pending()
+    return list(reversed(activities))
